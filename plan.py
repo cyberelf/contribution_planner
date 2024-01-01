@@ -3,14 +3,15 @@ from enum import Enum
 from typing import List, Tuple, Optional
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+from icalendar import Calendar as ICalender, Event
 
 
 GithubContributionLevels = 4
 
 class Mode(Enum):
     """Mode for the GitHubPlanner colors"""
-    DEPTH = 1
-    PLAIN = 2
+    DEPTH = "depth"
+    PLAIN = "plain"
     
 class Calendar:
     """Represents a GitHub contribution calendar"""    
@@ -26,12 +27,14 @@ class Calendar:
         first_sunday = date + datetime.timedelta(days=days_to_add)
         return first_sunday
     
-    def get_contribution_days(self) -> List:
+    def get_contribution_days(self) -> List[Tuple[datetime.datetime, int]]:
         start_date = self._get_first_sunday()
         contribution_days = []
         # Calculate the date for each contribution in the matrix
         for week in range(self._matrix.shape[1]):  # Iterate over weeks (columns)
             for day in range(self._matrix.shape[0]):  # Iterate over days (rows)
+                if self._matrix[day, week] == 0:
+                    continue
                 # Calculate the date for this cell
                 current_date = start_date + datetime.timedelta(days=week*7 + day)
                 # Append the date and contribution level to the list
@@ -39,7 +42,7 @@ class Calendar:
 
         return contribution_days
     
-    def create_image(self, cell_size: int = 20, padding: int = 2):
+    def to_image(self, cell_size: int = 20, padding: int = 2) -> Image:
         """Creates an image representing the contribution calendar"""
         # Define colors for different levels of contributions (feel free to adjust)
         colors = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]  # GitHub color scheme
@@ -62,6 +65,23 @@ class Calendar:
                 draw.rectangle([top_left, bottom_right], fill=color)
 
         return image
+    
+    def save_icalendar(self, file_name: str='contributions.ics') -> str:
+        # Create a calendar
+        cal = ICalender()
+
+        for day, contribution in self.get_contribution_days():
+            event = Event()
+            event.add('summary', f'Make {contribution} contributions')
+            event.add('dtstart', day.date())
+            event.add('dtend', (day + datetime.timedelta(days=1)).date())
+            cal.add_component(event)
+
+        # Write the calendar to an ics file
+        with open(file_name, 'wb') as f:
+            f.write(cal.to_ical())
+
+        return file_name
 
 class GitHubPlanner:
     def __init__(self, font_path: str, mode: Mode):
@@ -126,13 +146,34 @@ class GitHubPlanner:
             return np.zeros_like(img_array)
         max_level = GithubContributionLevels if self.mode == Mode.DEPTH else 1
         normalized_array = (img_array - min_val) / (max_val - min_val) * max_level
-        contribution_matrix = np.ceil(normalized_array).astype(int)
+        contribution_matrix = np.rint(normalized_array).astype(int)
 
         return contribution_matrix
 
 
 if __name__ == "__main__":
-    planner = GitHubPlanner("font/DejaVuSans-Bold.ttf", Mode.DEPTH)
-    calendar = planner.plan("Hello World", 2024)
-    calendar.create_image().save("calendar.png")
-    print(calendar.get_contribution_days())
+    import argparse
+    parser = argparse.ArgumentParser(description='GitHub Contribution Planner')
+    parser.add_argument('text', help='Text to plan')
+    parser.add_argument('-y', '--year', type=int, help='Year to plan for')
+    parser.add_argument('--font', type=str, help='Font to use')
+    parser.add_argument('-c', '--commit-level', action="store_true", help='Use commit level colors')
+    parser.add_argument('-o', '--save-icalendar', action="store_true", help='Save to icalendar file')
+    parser.add_argument('-s', '--save-image', action="store_true", help='show image')
+    args = parser.parse_args()
+    
+    if not args.save_icalendar and not args.save_image:
+        parser.error("Either --save-icalendar or --save-image is required")
+    
+    font_path = args.font if args.font else "font/DejaVuSans-Bold.ttf"
+    mode = Mode.DEPTH if args.commit_level else Mode.PLAIN
+    year = args.year if args.year else datetime.datetime.now().year
+        
+    planner = GitHubPlanner(font_path, mode)
+    calendar = planner.plan(args.text, year)
+    
+    if args.save_image:
+        calendar.to_image().save("calendar.png")
+    
+    if args.save_icalendar:
+        calendar.save_icalendar("contributions.ics")
